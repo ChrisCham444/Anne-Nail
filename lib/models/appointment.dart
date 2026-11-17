@@ -13,9 +13,15 @@ class Appointment {
     required this.end,
     required this.customerName,
     required this.customerEmail,
+    this.serviceId = '',
+    this.reservationCode = '',
+    this.eventUrl,
   });
 
   final String eventId;
+  final String serviceId;
+  final String reservationCode;
+  final String? eventUrl;
   final String serviceName;
   final DateTime start;
   final DateTime end;
@@ -24,6 +30,9 @@ class Appointment {
 
   Map<String, Object?> toJson() => {
     'eventId': eventId,
+    'serviceId': serviceId,
+    'reservationCode': reservationCode,
+    'eventUrl': eventUrl,
     'serviceName': serviceName,
     'start': start.toUtc().toIso8601String(),
     'end': end.toUtc().toIso8601String(),
@@ -33,6 +42,9 @@ class Appointment {
 
   factory Appointment.fromJson(Map<String, dynamic> json) => Appointment(
     eventId: json['eventId'] as String,
+    serviceId: json['serviceId'] as String? ?? '',
+    reservationCode: json['reservationCode'] as String? ?? '',
+    eventUrl: json['eventUrl'] as String?,
     serviceName: json['serviceName'] as String,
     start: DateTime.parse(json['start'] as String).toLocal(),
     end: DateTime.parse(json['end'] as String).toLocal(),
@@ -86,27 +98,6 @@ class AppointmentStore {
     }
   }
 
-  Future<void> save(Appointment appointment) async {
-    try {
-      final response = await _client
-          .post(
-            _appointmentsUri,
-            headers: const {'content-type': 'application/json'},
-            body: jsonEncode(appointment.toJson()),
-          )
-          .timeout(const Duration(seconds: 10));
-      _checkResponse(response);
-    } on http.ClientException {
-      throw const AppointmentStoreException(
-        'No pudimos conectar con el servidor de citas.',
-      );
-    } on TimeoutException {
-      throw const AppointmentStoreException(
-        'El servidor de citas tardó demasiado en responder.',
-      );
-    }
-  }
-
   void _checkResponse(http.Response response) {
     if (response.statusCode >= 200 && response.statusCode < 300) return;
     var message = 'El servidor rechazó la operación (${response.statusCode}).';
@@ -116,9 +107,9 @@ class AppointmentStore {
         message = error;
       }
     } on FormatException {
-      // Keep the HTTP status message when the server response is not JSON.
+      // Si el servidor no envía JSON, se conserva el mensaje por código HTTP.
     } on TypeError {
-      // Keep the HTTP status message when the server response has an invalid shape.
+      // Si el formato JSON no es un mapa, se conserva el mensaje por código HTTP.
     }
     throw AppointmentStoreException(message);
   }

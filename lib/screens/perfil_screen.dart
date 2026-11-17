@@ -3,7 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../models/appointment.dart';
 import '../services/app_session.dart';
-import '../services/google_calendar_service.dart';
+import '../services/google_sign_in_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_header.dart';
 import '../widgets/bottom_nav_bar.dart';
@@ -98,7 +98,7 @@ class _PerfilScreenState extends State<PerfilScreen> {
     if (_signingOut) return;
     setState(() => _signingOut = true);
     try {
-      await GoogleCalendarService.instance.signOut();
+      await GoogleSignInService.instance.signOut();
       if (!mounted) return;
       Navigator.pushAndRemoveUntil(
         context,

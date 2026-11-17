@@ -1,9 +1,9 @@
+import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../config/app_config.dart';
 import '../models/appointment.dart';
-import '../services/google_calendar_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/pill_button.dart';
 import 'home_screen.dart';
@@ -23,9 +23,14 @@ class _ConfirmacionCitaScreenState extends State<ConfirmacionCitaScreen> {
   Future<void> _openCalendar() async {
     setState(() => _openingCalendar = true);
     try {
-      await GoogleCalendarService.instance.openCalendarEvent(
-        widget.appointment.eventId,
-      );
+      final url = widget.appointment.eventUrl;
+      if (url == null ||
+          !await launchUrl(
+            Uri.parse(url),
+            mode: LaunchMode.externalApplication,
+          )) {
+        throw StateError('No se pudo abrir la cita en Google Calendar.');
+      }
     } on Exception catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -42,7 +47,9 @@ class _ConfirmacionCitaScreenState extends State<ConfirmacionCitaScreen> {
     final date = DateFormat('EEEE d MMMM yyyy', 'es').format(appointment.start);
     final time =
         '${DateFormat('HH:mm').format(appointment.start)} – ${DateFormat('HH:mm').format(appointment.end)}';
-    final code = appointment.eventId.length > 8
+    final code = appointment.reservationCode.isNotEmpty
+        ? appointment.reservationCode
+        : appointment.eventId.length > 8
         ? appointment.eventId.substring(0, 8).toUpperCase()
         : appointment.eventId.toUpperCase();
 
@@ -128,7 +135,9 @@ class _ConfirmacionCitaScreenState extends State<ConfirmacionCitaScreen> {
                         ? 'Abriendo calendario…'
                         : 'Agregar al calendario',
                     icon: Icons.calendar_month_outlined,
-                    onPressed: _openingCalendar ? null : _openCalendar,
+                    onPressed: _openingCalendar || appointment.eventUrl == null
+                        ? null
+                        : _openCalendar,
                   ),
                   const SizedBox(height: 10),
                   TextButton(

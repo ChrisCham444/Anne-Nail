@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../config/app_config.dart';
-import '../models/appointment.dart';
+import '../services/appointment_service.dart';
 import '../services/app_session.dart';
-import '../services/google_calendar_service.dart';
+import '../services/google_sign_in_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_header.dart';
 import '../widgets/bottom_nav_bar.dart';
@@ -35,14 +35,10 @@ class _CitasScreenState extends State<CitasScreen> {
   DateTime _selectedDay = _initialBookingDay();
   DateTime? _selectedSlot;
   List<DateTime> _availableSlots = [];
-  List<DateTime> _allSlots = [];
-  final Set<String> _unavailableDayKeys = {};
   bool _loadingSlots = true;
   bool _booking = false;
   String? _errorMessage;
-  bool _permissionError = false;
-
-  GoogleCalendarService get _calendar => GoogleCalendarService.instance;
+  int _availabilityRequest = 0;
 
   @override
   void initState() {
@@ -51,85 +47,35 @@ class _CitasScreenState extends State<CitasScreen> {
   }
 
   Future<void> _loadSlots() async {
+    final request = ++_availabilityRequest;
+    final day = _selectedDay;
     setState(() {
       _loadingSlots = true;
       _errorMessage = null;
-      _permissionError = false;
       _selectedSlot = null;
     });
     try {
-      final slots = _calendar.isSignedIn
-          ? await _calendar.getAvailableSlots(_selectedDay, _serviceDuration)
-          : _calendar.getOfficeSlots(_selectedDay, _serviceDuration);
-      if (!mounted) return;
-      setState(() {
-        _availableSlots = slots;
-        _allSlots = _calendar.getOfficeSlots(_selectedDay, _serviceDuration);
-        _loadingSlots = false;
-      });
-      if (_calendar.isSignedIn) await _loadWeekAvailability();
-    } on CalendarPermissionException catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _errorMessage = error.message;
-        _permissionError = true;
-        _loadingSlots = false;
-      });
-    } on CalendarNetworkException catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _errorMessage = error.message;
-        _loadingSlots = false;
-      });
-    }
-  }
-
-  Future<void> _loadWeekAvailability() async {
-    final weekStart = _weekStart(_selectedDay);
-    final today = DateUtils.dateOnly(DateTime.now());
-    final dates =
-        List.generate(7, (index) => weekStart.add(Duration(days: index)))
-            .where(
-              (day) => !day.isBefore(today) && day.weekday != DateTime.sunday,
-            )
-            .toList();
-    try {
-      final results = await Future.wait(
-        dates.map(
-          (day) async =>
-              (day, await _calendar.getAvailableSlots(day, _serviceDuration)),
-        ),
+      final availability = await AppointmentService.instance.getAvailability(
+        date: day,
+        serviceId: AppConfig.signatureServiceId,
       );
-      if (!mounted || !_sameDay(weekStart, _weekStart(_selectedDay))) return;
+      if (!mounted || request != _availabilityRequest) return;
       setState(() {
-        for (final (day, slots) in results) {
-          final key = _dayKey(day);
-          if (slots.isEmpty) {
-            _unavailableDayKeys.add(key);
-          } else {
-            _unavailableDayKeys.remove(key);
-          }
-        }
+        _availableSlots = availability.all;
+        _loadingSlots = false;
       });
-    } on CalendarPermissionException catch (error) {
-      if (!mounted) return;
+    } on AppointmentServiceException catch (error) {
+      if (!mounted || request != _availabilityRequest) return;
       setState(() {
         _errorMessage = error.message;
-        _permissionError = true;
+        _loadingSlots = false;
       });
-    } on CalendarNetworkException catch (error) {
-      if (!mounted) return;
-      setState(() => _errorMessage = error.message);
     }
   }
-
-  String _dayKey(DateTime day) => '${day.year}-${day.month}-${day.day}';
 
   void _selectDay(DateTime day) {
     final today = DateUtils.dateOnly(DateTime.now());
-    if (day.isBefore(today) ||
-        day.weekday == DateTime.sunday ||
-        _unavailableDayKeys.contains(_dayKey(day))) {
+    if (day.isBefore(today) || day.weekday == DateTime.sunday) {
       return;
     }
     setState(() => _selectedDay = day);
@@ -176,58 +122,21 @@ class _CitasScreenState extends State<CitasScreen> {
   Future<void> _confirmAppointment() async {
     final slot = _selectedSlot;
     if (slot == null || _booking) return;
+    final day = _selectedDay;
     setState(() {
       _booking = true;
       _errorMessage = null;
     });
     try {
-      if (!_calendar.isSignedIn) await _calendar.signIn();
-      final available = await _calendar.getAvailableSlots(
-        _selectedDay,
-        _serviceDuration,
-      );
-      if (!available.any((item) => _sameTime(item, slot))) {
-        if (!mounted) return;
-        setState(() {
-          _availableSlots = available;
-          _allSlots = _calendar.getOfficeSlots(_selectedDay, _serviceDuration);
-          _selectedSlot = null;
-          _errorMessage =
-              'Ese horario acaba de ocuparse. Elige otra hora disponible.';
-          _booking = false;
-        });
-        return;
-      }
-
+      final idToken = await GoogleSignInService.instance.signInAndGetIdToken();
       final session = AppSession.instance;
-      final eventId = await _calendar.createAppointment(
-        serviceName: _serviceName,
-        start: slot,
-        duration: _serviceDuration,
+      final appointment = await AppointmentService.instance.createAppointment(
+        serviceId: AppConfig.signatureServiceId,
+        date: day,
+        time: slot,
         customerName: session.displayName,
-        customerEmail: session.email,
+        idToken: idToken,
       );
-      final appointment = Appointment(
-        eventId: eventId,
-        serviceName: _serviceName,
-        start: slot,
-        end: slot.add(_serviceDuration),
-        customerName: session.displayName,
-        customerEmail: session.email,
-      );
-      try {
-        await AppointmentStore.instance.save(appointment);
-      } on Exception catch (error) {
-        try {
-          await _calendar.deleteAppointment(eventId);
-        } on Exception catch (rollbackError) {
-          throw StateError(
-            'No se guardó la cita en la base de datos ($error) y tampoco '
-            'se pudo cancelar en Google Calendar ($rollbackError).',
-          );
-        }
-        rethrow;
-      }
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
@@ -235,31 +144,46 @@ class _CitasScreenState extends State<CitasScreen> {
           builder: (_) => ConfirmacionCitaScreen(appointment: appointment),
         ),
       );
-    } on CalendarSignInCancelledException {
+    } on GoogleSignInCancelledException {
       if (!mounted) return;
       setState(() {
         _booking = false;
         _errorMessage = 'Inicia sesión con Google para confirmar tu cita.';
-        _permissionError = true;
       });
-    } on CalendarPermissionException catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _booking = false;
-        _errorMessage = error.message;
-        _permissionError = true;
-      });
-    } on CalendarNetworkException catch (error) {
+    } on GoogleSignInServiceException catch (error) {
       if (!mounted) return;
       setState(() {
         _booking = false;
         _errorMessage = error.message;
       });
-    } on Exception catch (error) {
+    } on AppointmentServiceException catch (error) {
+      if (!mounted) return;
+      if (error.statusCode == 409) {
+        setState(() {
+          _booking = false;
+          _selectedSlot = null;
+        });
+        await _loadSlots();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Ese horario acaba de ocuparse. Actualizamos la disponibilidad.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+      setState(() {
+        _booking = false;
+        _errorMessage = error.message;
+      });
+    } on Exception {
       if (!mounted) return;
       setState(() {
         _booking = false;
-        _errorMessage = 'No pudimos confirmar la cita: $error';
+        _errorMessage = 'No pudimos confirmar la cita. Inténtalo nuevamente.';
       });
     }
   }
@@ -284,8 +208,8 @@ class _CitasScreenState extends State<CitasScreen> {
     final month = DateFormat('MMMM yyyy', 'es').format(_selectedDay);
     final weekStart = _weekStart(_selectedDay);
     final today = DateUtils.dateOnly(DateTime.now());
-    final morning = _allSlots.where((slot) => slot.hour < 12).toList();
-    final afternoon = _allSlots.where((slot) => slot.hour >= 12).toList();
+    final morning = _availableSlots.where((slot) => slot.hour < 12).toList();
+    final afternoon = _availableSlots.where((slot) => slot.hour >= 12).toList();
     final canConfirm = _selectedSlot != null && !_booking && !_loadingSlots;
 
     return Scaffold(
@@ -351,7 +275,7 @@ class _CitasScreenState extends State<CitasScreen> {
                         child: _sectionHeader('PASO 02', 'Horario Disponible'),
                       ),
                       Text(
-                        DateTime.now().timeZoneName,
+                        'Hora del estudio',
                         style: const TextStyle(
                           color: AppTheme.muted,
                           fontSize: 10,
@@ -373,7 +297,9 @@ class _CitasScreenState extends State<CitasScreen> {
                         ),
                       ),
                     )
-                  else if (_allSlots.isEmpty)
+                  else if (_errorMessage != null)
+                    const SizedBox.shrink()
+                  else if (_availableSlots.isEmpty)
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 20),
                       child: Text(
@@ -384,14 +310,6 @@ class _CitasScreenState extends State<CitasScreen> {
                     )
                   else ...[
                     const SizedBox(height: 14),
-                    if (_availableSlots.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.only(bottom: 12),
-                        child: Text(
-                          'No hay horarios disponibles para esta fecha. Elige otro día.',
-                          style: TextStyle(color: AppTheme.muted, fontSize: 12),
-                        ),
-                      ),
                     _timeGroup('MAÑANA', Icons.wb_sunny_outlined, morning),
                     const SizedBox(height: 15),
                     _timeGroup('TARDE', Icons.nights_stay_outlined, afternoon),
@@ -520,10 +438,7 @@ class _CitasScreenState extends State<CitasScreen> {
       children: List.generate(7, (index) {
         final day = weekStart.add(Duration(days: index));
         final selected = _sameDay(day, _selectedDay);
-        final disabled =
-            day.isBefore(today) ||
-            day.weekday == DateTime.sunday ||
-            _unavailableDayKeys.contains(_dayKey(day));
+        final disabled = day.isBefore(today) || day.weekday == DateTime.sunday;
         final weekday = DateFormat('EEE', 'es').format(day);
         return Expanded(
           child: GestureDetector(
@@ -616,15 +531,10 @@ class _CitasScreenState extends State<CitasScreen> {
           ),
           itemBuilder: (context, index) {
             final time = times[index];
-            final isAvailable = _availableSlots.any(
-              (available) => _sameTime(available, time),
-            );
             final selected =
                 _selectedSlot != null && _sameTime(_selectedSlot!, time);
             return OutlinedButton(
-              onPressed: isAvailable
-                  ? () => setState(() => _selectedSlot = time)
-                  : null,
+              onPressed: () => setState(() => _selectedSlot = time),
               style: OutlinedButton.styleFrom(
                 foregroundColor: selected ? AppTheme.surface : AppTheme.text,
                 backgroundColor: selected ? AppTheme.button : AppTheme.surface,
@@ -698,10 +608,7 @@ class _CitasScreenState extends State<CitasScreen> {
       ),
       child: Row(
         children: [
-          Icon(
-            _permissionError ? Icons.lock_outline : Icons.wifi_off_outlined,
-            color: AppTheme.accent,
-          ),
+          const Icon(Icons.wifi_off_outlined, color: AppTheme.accent),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
@@ -709,12 +616,7 @@ class _CitasScreenState extends State<CitasScreen> {
               style: const TextStyle(color: AppTheme.text, fontSize: 11),
             ),
           ),
-          TextButton(
-            onPressed: _permissionError && !_calendar.isSignedIn
-                ? _confirmAppointment
-                : _loadSlots,
-            child: const Text('Reintentar'),
-          ),
+          TextButton(onPressed: _loadSlots, child: const Text('Reintentar')),
         ],
       ),
     );

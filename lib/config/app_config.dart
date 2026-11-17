@@ -1,8 +1,18 @@
+import 'package:flutter/foundation.dart';
+
 class AppConfig {
-  static const apiBaseUrl = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'http://localhost:3000/api',
-  );
+  static String get apiBaseUrl {
+    const environmentValue = String.fromEnvironment('API_BASE_URL');
+    if (environmentValue.isNotEmpty) {
+      return environmentValue;
+    }
+
+    if (kIsWeb) {
+      return 'http://localhost:3000/api';
+    }
+
+    return 'http://10.0.2.2:3000/api';
+  }
 
   // TODO: Configurar los OAuth Client ID de las aplicaciones Android y web.
   static const googleClientId = 'YOUR_GOOGLE_OAUTH_CLIENT_ID';
@@ -17,7 +27,7 @@ class AppConfig {
   // TODO: Reemplazar por el correo que recibirá las invitaciones del estudio.
   static const studioEmail = 'YOUR_STUDIO_EMAIL';
 
-  static const studioName = 'Anne Nails Studio';
+  static const studioName = 'Anne Nail Studio';
   static const openingHour = 10;
   static const closingHour = 19;
   static const closingMinute = 30;
@@ -27,4 +37,5 @@ class AppConfig {
   // TODO: Confirmar el precio de este servicio y la moneda configurada.
   static const signatureServicePrice = 45.0;
   static const signatureServiceDuration = Duration(minutes: 60);
+  static const signatureServiceId = 'signature-manicura-rusa';
 }
